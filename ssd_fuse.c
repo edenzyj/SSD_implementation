@@ -153,7 +153,7 @@ static int nand_erase(int block)
 static unsigned int get_next_pca()
 {
     /*  TODO: seq A, need to change to seq B */
-    // Done
+    // done
 	
     if (curr_pca.pca == INVALID_PCA)
     {
@@ -204,13 +204,16 @@ static int ftl_read( char* buf, size_t lba)
 static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
 {
     /*  TODO: only basic write case, need to consider other cases */
+    // Done
+
     PCA_RULE pca;
     pca.pca = get_next_pca();
 
     if (nand_write(buf, pca.pca) > 0)
     {
         L2P[lba] = pca.pca;
-        return 512 ;
+        if (lba_rnage == 512) return 512;
+        else return lba_rnage;
     }
     else
     {
@@ -315,6 +318,7 @@ static int ssd_read(const char* path, char* buf, size_t size,
 static int ssd_do_write(const char* buf, size_t size, off_t offset)
 {
     /*  TODO: only basic write case, need to consider other cases */
+    // Done
 	
     int tmp_lba, tmp_lba_range, process_size;
     int idx, curr_size, remain_size, rst;
@@ -331,30 +335,54 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
     process_size = 0;
     remain_size = size;
     curr_size = 0;
+
     for (idx = 0; idx < tmp_lba_range; idx++)
     {
         /*  example only align 512, need to implement other cases  */
-        if(offset % 512 == 0 && size % 512 == 0)
+        if (offset % 512 == 0)
         {
-            rst = ftl_write(buf + process_size, 1, tmp_lba + idx);
-            if ( rst == 0 )
+            if (remain_size >= 512)
             {
-                //write full return -enomem;
+                rst = ftl_write(buf + process_size, 512, tmp_lba + idx);
+            }
+            else
+            {
+                rst = ftl_write(buf + process_size, remain_size, tmp_lba + idx);
+            }
+
+            if (rst < 0)
+            {
+                // Write fail
                 return -ENOMEM;
             }
-            else if (rst < 0)
-            {
-                //error
-                return rst;
-            }
-            curr_size += 512;
-            remain_size -= 512;
+
+            curr_size += rst;
+            remain_size -= rst;
             process_size += 512;
             offset += 512;
         }
-        else{
-            printf(" --> Not align 512 !!!");
-            return -EINVAL;
+        else
+        {
+            rst = 512 - (offset % 512);
+            if (remain_size >= rst)
+            {
+                rst = ftl_write(buf + process_size + rst, rst, tmp_lba + idx);
+            }
+            else
+            {
+                rst = ftl_write(buf + process_size + rst, remain_size, tmp_lba + idx);
+            }
+
+            if (rst < 0)
+            {
+                // Write fail
+                return -ENOMEM;
+            }
+
+            curr_size += rst;
+            remain_size -= rst;
+            process_size += 512;
+            offset += (offset % 512);
         }
     }
 
