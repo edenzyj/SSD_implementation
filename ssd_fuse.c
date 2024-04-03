@@ -93,7 +93,7 @@ static int nand_read(char* buf, int pca)
     }
     return 512;
 }
-static int nand_write(const char* buf, int pca)
+static int nand_write(const char* buf, int pca, int size)
 {
     char nand_name[100];
     FILE* fptr;
@@ -106,7 +106,7 @@ static int nand_write(const char* buf, int pca)
     if ( (fptr = fopen(nand_name, "r+")))
     {
         fseek( fptr, my_pca.fields.page * 512, SEEK_SET );
-        fwrite(buf, 1, 512, fptr);
+        fwrite(buf, 1, size, fptr);
         fclose(fptr);
         physic_size ++;
     }
@@ -209,11 +209,10 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     PCA_RULE pca;
     pca.pca = get_next_pca();
 
-    if (nand_write(buf, pca.pca) > 0)
+    if (nand_write(buf, pca.pca, lba_rnage) > 0)
     {
         L2P[lba] = pca.pca;
-        if (lba_rnage == 512) return 512;
-        else return lba_rnage;
+        return 512;
     }
     else
     {
@@ -330,7 +329,8 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
     }
 
     tmp_lba = offset / 512;
-    tmp_lba_range = (offset + size - 1) / 512 - (tmp_lba) + 1;
+    offset = offset % 512;
+    tmp_lba_range = (offset + size - 1) / 512 + 1;
 
     process_size = 0;
     remain_size = size;
@@ -339,7 +339,7 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
     for (idx = 0; idx < tmp_lba_range; idx++)
     {
         /*  example only align 512, need to implement other cases  */
-        if (offset % 512 == 0)
+        if (offset == 0)
         {
             if (remain_size >= 512)
             {
@@ -359,18 +359,24 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
             curr_size += rst;
             remain_size -= rst;
             process_size += 512;
-            offset += 512;
         }
         else
         {
-            rst = 512 - (offset % 512);
+            rst = 512 - offset;
+
+            char* tmp_buf;
+            int read_size;
+
+            read_size = ssd_do_read(tmp_buf, 512, tmp_lba * 512);
+            memcpy(tmp_buf + offset, buf + process_size, rst)
+
             if (remain_size >= rst)
             {
-                rst = ftl_write(buf + process_size + rst, rst, tmp_lba + idx);
+                rst = ftl_write(tmp_buf, offset + rst, tmp_lba + idx);
             }
             else
             {
-                rst = ftl_write(buf + process_size + rst, remain_size, tmp_lba + idx);
+                rst = ftl_write(tmp_buf, offset + remain_size, tmp_lba + idx);
             }
 
             if (rst < 0)
@@ -380,9 +386,9 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
             }
 
             curr_size += rst;
-            remain_size -= rst;
-            process_size += 512;
-            offset += (offset % 512);
+            remain_size -= (512 - offset);
+            process_size += (512 - offset);
+            offset = 0;
         }
     }
 
