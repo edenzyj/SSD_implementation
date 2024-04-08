@@ -28,6 +28,8 @@ static size_t logic_size;
 static size_t host_write_size;
 static size_t nand_write_size;
 
+unsigned int page_number;
+
 typedef union pca_rule PCA_RULE;
 union pca_rule
 {
@@ -43,10 +45,70 @@ PCA_RULE curr_pca;
 
 unsigned int* L2P;
 
+unsigned int* P2L;
+
+struct queue
+{
+    unsigned int* arr;
+    unsigned int size;
+};
+
+struct queue PCA_Empty;
+
+static void enqueue(struct queue q, unsigned int val)
+{
+    q.arr[q.size] = val;
+    q.size += 1;
+    return;
+}
+
+static void dequeue(struct queue q)
+{
+    for(int i = 1; i <= q.size; i++){
+        q.arr[i-1] = q.arr[i];
+    }
+    q.size -= 1;
+    return;
+}
+
+struct priority_array
+{
+    bool** arr;
+    unsigned int* cnt;
+    unsigned int min_one;
+    unsigned int min_two;
+};
+
+struct priority_array PCA_Used;
+
+static void comparation(struct priority_array pa)
+{
+    int small_one = page_number + 1;
+    int small_two = page_number + 1;
+
+    for(int i = 0; i < PHYSICAL_NAND_NUM; i++)
+    {
+        if(i == curr_pca.fields.block) continue;
+        if(pa.cnt[i] < small_one)
+        {
+            pa.min_two = pa.min_one;
+            pa.min_one = i;
+            small_two = small_one;
+            small_one = pa.cnt[i];
+        }
+        else if(pa.cnt[i] < small_two)
+        {
+            pa.min_two = i;
+            small_two = pa.cnt[i];
+        }
+    }
+    return;
+}
+
 static int ssd_resize(size_t new_size)
 {
     //set logic size to new_size
-    if (new_size >= LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024  )
+    if (new_size >= LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 )
     {
         return -ENOMEM;
     }
@@ -82,7 +144,7 @@ static int nand_read(char* buf, int pca)
     //read from nand
     if ( (fptr = fopen(nand_name, "r") ))
     {
-        fseek( fptr, my_pca.fields.page * 512, SEEK_SET );
+        fseek(fptr, my_pca.fields.page * 512, SEEK_SET);
         fread(buf, 1, 512, fptr);
         fclose(fptr);
     }
@@ -150,48 +212,122 @@ static int nand_erase(int block)
     return 1;
 }
 
+static void ftl_gc()
+{
+    // get the two nand number with minimal used size
+    comparation(PCA_Used);
+
+    PCA_RULE pca;
+    int mv_size;
+
+    // clean two nands if it can.
+    if(PCA_Used.cnt[PCA_Used.min_one] + PCA_Used.cnt[PCA_Used.min_two] <= page_number)
+    {
+        pca.fields.block = PCA_Used.min_two;
+        for(int i = 0; i < page_number; i++)
+        {
+            if(PCA_Used.arr[PCA_Used.min_two][i])
+            {
+                pca.fields.page = i;
+                char* temp_buf = malloc(512 * sizeof(char));
+                
+                // read and maintain related infornmation
+                mv_size = nand_read(temp_buf, pca.pca);
+                L2P[P2L[pca.pca]] = curr_pca.pca;
+                P2L[curr_pca.pca] = P2L[pca.pca];
+                P2L[pca.pca] = INVALID_PCA;
+                PCA_Used.arr[PCA_Used.min_two][i] = false;
+
+                // write and maintain related infornmation
+                mv_size = nand_write(temp_buf, curr_pca.pca, mv_size);
+                PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
+                PCA_Used.cnt[curr_pca.fields.block] += 1;
+                curr_pca.page += 1;
+            }
+        }
+        nand_erase(PCA_Used.min_two);
+        PCA_Used.cnt[PCA_Used.min_two] = 0;
+    }
+    
+    pca.fields.block = PCA_Used.min_one;
+    for(int i = 0; i < page_number; i++)
+    {
+        if(PCA_Used.arr[PCA_Used.min_one][i])
+        {
+            pca.fields.page = i;
+            char* temp_buf = malloc(512 * sizeof(char));
+                
+            // read and maintain related information
+            mv_size = nand_read(temp_buf, pca.pca);
+            L2P[P2L[pca.pca]] = curr_pca.pca;
+            P2L[curr_pca.pca] = P2L[pca.pca];
+            P2L[pca.pca] = INVALID_PCA;
+            PCA_Used.arr[PCA_Used.min_one][i] = false;
+
+            // write and maintain related information
+            mv_size = nand_write(temp_buf, curr_pca.pca, mv_size);
+            PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
+            PCA_Used.cnt[curr_pca.fields.block] += 1;
+            curr_pca.page += 1;
+        }
+    }
+    nand_erase(PCA_Used.min_one);
+    PCA_Used.cnt[PCA_Used.min_one] = 0;
+
+    return;
+}
+
 static unsigned int get_next_pca()
 {
     /*  TODO: seq A, need to change to seq B */
-    // done
+    // Done
 	
     if (curr_pca.pca == INVALID_PCA)
     {
         //init
-        curr_pca.pca = 0;
-        return curr_pca.pca;
-    }
-    else if (curr_pca.pca == FULL_PCA)
-    {
-        //ssd is full, no pca can be allocated
-        printf("No new PCA\n");
-        return FULL_PCA;
+        curr_pca.block = PCA_Empty.arr[0];
+        dequeue(PCA_Empty);
+        curr_pca.page = 0;
     }
 
-    if ( curr_pca.fields.block == PHYSICAL_NAND_NUM - 1)
-    {
-        printf("No new PCA\n");
-        curr_pca.pca = FULL_PCA;
-        return FULL_PCA;
-    }
-    curr_pca.fields.block = (curr_pca.fields.block + 1 ) % PHYSICAL_NAND_NUM;
+    else if(curr_pca.pca != FULL_PCA) curr_pca.fields.page += 1;
 
-    if ( curr_pca.fields.page >= (NAND_SIZE_KB * 1024 / 512) )
+    if (curr_pca.pca == FULL_PCA || curr_pca.fields.page >= page_number)
     {
-        curr_pca.fields.block += 1;
+        if (PCA_Empty.size == 0)
+        {
+            // ssd is full, no pca can be allocated
+            printf("No new PCA!\n");
+            curr_pca.pca = FULL_PCA;
+            return curr_pca.pca;
+        }
+
+        // allocate new block which is empty
+        curr_pca.fields.block = PCA_Empty.arr[0];
+        curr_pca.fields.page = 0;
+        dequeue(PCA_Empty);
+
+        if (PCA_Empty.size == 0)
+        {
+            // ssd is nearly full, do garbage collection
+            printf("Need to do GC!\n");
+            ftl_gc();
+        }
     }
-    else
-    {
-        printf("PCA = page %d, nand %d\n", curr_pca.fields.page, curr_pca.fields.block);
-        return curr_pca.pca;
-    }
+
+    // update PCA_Used to store which nand has been occupied
+    PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
+    PCA_Used.cnt[curr_pca.fields.block] += 1;
+
+    printf("PCA = page %d, nand %d\n", curr_pca.fields.page, curr_pca.fields.block);
+    return curr_pca.pca;
 }
 
 static int ftl_read( char* buf, size_t lba)
 {
     PCA_RULE pca;
-
 	pca.pca = L2P[lba];
+
 	if (pca.pca == INVALID_PCA) {
 	    //data has not be written, return 0
 	    return 0;
@@ -212,6 +348,7 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     if (nand_write(buf, pca.pca, lba_rnage) > 0)
     {
         L2P[lba] = pca.pca;
+        P2L[pca.pca] = lba;
         return 512;
     }
     else
@@ -368,7 +505,7 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
             int read_size;
 
             read_size = ssd_do_read(tmp_buf, 512, tmp_lba * 512);
-            memcpy(tmp_buf + offset, buf + process_size, rst)
+            memcpy(tmp_buf + offset, buf + process_size, rst);
 
             if (remain_size >= rst)
             {
@@ -477,9 +614,32 @@ int main(int argc, char* argv[])
     logic_size = 0;
 	nand_write_size = 0;
 	host_write_size = 0;
+    page_number = NAND_SIZE_KB * 1024 / 512;
     curr_pca.pca = INVALID_PCA;
-    L2P = malloc(LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 / 512 * sizeof(int));
-    memset(L2P, INVALID_PCA, sizeof(int)*LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 / 512);
+    L2P = malloc(LOGICAL_NAND_NUM * page_number * sizeof(int));
+    memset(L2P, INVALID_PCA, sizeof(int)*LOGICAL_NAND_NUM * page_number);
+    P2L = malloc(PHYSICAL_NAND_NUM * page_number * sizeof(int));
+    memset(P2L, INVALID_PCA, sizeof(int)*PHYSICAL_NAND_NUM * page_number);
+
+    // initialize empty PCA queue
+    PCA_Empty.arr = malloc(PHYSICAL_NAND_NUM * sizeof(int));
+    for(int i = 0; i < PHYSICAL_NAND_NUM; i++)
+    {
+        PCA_Empty.arr[i] = i;
+    }
+    PCA_Empty.size = PHYSICAL_NAND_NUM;
+
+    // initialize PCA usage record
+    PCA_Used.arr = malloc(PHYSICAL_NAND_NUM * page_number * sizeof(bool));
+    for(int i = 0; i < PHYSICAL_NAND_NUM; i++)
+    {
+        PCA_Used.arr[i] = malloc(page_number * sizeof(bool));
+        memset(PCA_Used.arr[i], false, page_number * sizeof(bool));
+    }
+    PCA_Used.cnt = malloc(PHYSICAL_NAND_NUM * sizeof(int));
+    memset(PCA_Used.cnt, 0, PHYSICAL_NAND_NUM * sizeof(int));
+    PCA_Used.min_one = 0;
+    PCA_Used.min_two = 1;
 
     //create nand file
     for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
