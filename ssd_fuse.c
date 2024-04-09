@@ -82,7 +82,7 @@ struct priority_array
 
 struct priority_array PCA_Used;
 
-static void comparation(struct priority_array pa)
+static void comparison(struct priority_array pa)
 {
     int small_one = page_number + 1;
     int small_two = page_number + 1;
@@ -213,37 +213,44 @@ static int nand_erase(int block)
     return 1;
 }
 
+static void gc_move(unsigned int nand, unsigned int page)
+{
+    PCA_RULE pca;
+    
+    pca.fields.block = nand;
+    pca.fields.page = page;
+    char* temp_buf = malloc(512 * sizeof(char));
+
+    // read and maintain related infornmation
+    int mv_size = nand_read(temp_buf, pca.pca);
+    L2P[P2L[pca.pca]] = curr_pca.pca;
+    P2L[curr_pca.pca] = P2L[pca.pca];
+    P2L[pca.pca] = INVALID_PCA;
+    PCA_Used.arr[nand][page] = false;
+
+    // write and maintain related infornmation
+    mv_size = nand_write(temp_buf, curr_pca.pca, mv_size);
+    PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
+    PCA_Used.cnt[curr_pca.fields.block] += 1;
+    curr_pca.fields.page += 1;
+}
+
 static void ftl_gc()
 {
     // get the two nand number with minimal used size
-    comparation(PCA_Used);
+    comparison(PCA_Used);
 
-    PCA_RULE pca;
-    int mv_size;
+    // no need to do garbage collection
+    if(PCA_Used.cnt[PCA_Used.min_one] == page_number) return;
 
     // clean two nands if it can.
     if(PCA_Used.cnt[PCA_Used.min_one] + PCA_Used.cnt[PCA_Used.min_two] <= page_number)
     {
-        pca.fields.block = PCA_Used.min_two;
         for(int i = 0; i < page_number; i++)
         {
             if(PCA_Used.arr[PCA_Used.min_two][i])
             {
-                pca.fields.page = i;
-                char* temp_buf = malloc(512 * sizeof(char));
-                
-                // read and maintain related infornmation
-                mv_size = nand_read(temp_buf, pca.pca);
-                L2P[P2L[pca.pca]] = curr_pca.pca;
-                P2L[curr_pca.pca] = P2L[pca.pca];
-                P2L[pca.pca] = INVALID_PCA;
-                PCA_Used.arr[PCA_Used.min_two][i] = false;
-
-                // write and maintain related infornmation
-                mv_size = nand_write(temp_buf, curr_pca.pca, mv_size);
-                PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
-                PCA_Used.cnt[curr_pca.fields.block] += 1;
-                curr_pca.fields.page += 1;
+                gc_move(PCA_Used.min_two, i);
             }
         }
         nand_erase(PCA_Used.min_two);
@@ -252,26 +259,11 @@ static void ftl_gc()
         printf("Clean two nands~\n");
     }
     
-    pca.fields.block = PCA_Used.min_one;
     for(int i = 0; i < page_number; i++)
     {
         if(PCA_Used.arr[PCA_Used.min_one][i])
         {
-            pca.fields.page = i;
-            char* temp_buf = malloc(512 * sizeof(char));
-                
-            // read and maintain related information
-            mv_size = nand_read(temp_buf, pca.pca);
-            L2P[P2L[pca.pca]] = curr_pca.pca;
-            P2L[curr_pca.pca] = P2L[pca.pca];
-            P2L[pca.pca] = INVALID_PCA;
-            PCA_Used.arr[PCA_Used.min_one][i] = false;
-
-            // write and maintain related information
-            mv_size = nand_write(temp_buf, curr_pca.pca, mv_size);
-            PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
-            PCA_Used.cnt[curr_pca.fields.block] += 1;
-            curr_pca.fields.page += 1;
+            gc_move(PCA_Used.min_one, i);
         }
     }
     nand_erase(PCA_Used.min_one);
@@ -353,11 +345,13 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     /*  TODO: only basic write case, need to consider other cases */
     // Done
 
+    /**
     if(L2P[lba] != INVALID_PCA)
     {
         printf(" --> Cannot write at the same lba !!!\n");
         return -EINVAL;
     }
+    **/
     
     PCA_RULE pca;
     pca.pca = get_next_pca();
