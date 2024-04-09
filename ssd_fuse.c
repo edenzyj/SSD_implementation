@@ -249,6 +249,7 @@ static void ftl_gc()
         nand_erase(PCA_Used.min_two);
         PCA_Used.cnt[PCA_Used.min_two] = 0;
         enqueue(PCA_Empty, PCA_Used.min_two);
+        printf("Clean two nands~\n");
     }
     
     pca.fields.block = PCA_Used.min_one;
@@ -276,6 +277,13 @@ static void ftl_gc()
     nand_erase(PCA_Used.min_one);
     PCA_Used.cnt[PCA_Used.min_one] = 0;
     enqueue(PCA_Empty, PCA_Used.min_one);
+
+    if(curr_pca.fields.page >= page_number)
+    {
+        curr_pca.fields.block = PCA_Empty.arr[0];
+        curr_pca.fields.page = 0;
+        dequeue(PCA_Empty);
+    }
 
     return;
 }
@@ -345,6 +353,12 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     /*  TODO: only basic write case, need to consider other cases */
     // Done
 
+    if(L2P[lba] != INVALID_PCA)
+    {
+        printf(" --> Cannot write at the same lba !!!\n");
+        return -EINVAL;
+    }
+    
     PCA_RULE pca;
     pca.pca = get_next_pca();
 
@@ -356,7 +370,7 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     }
     else
     {
-        printf(" --> Write fail !!!");
+        printf(" --> Write fail !!!\n");
         return -EINVAL;
     }
 }
@@ -468,9 +482,10 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
         return -ENOMEM;
     }
 
-    tmp_lba = offset / 512;
-    offset = offset % 512;
-    tmp_lba_range = (offset + size - 1) / 512 + 1;
+    tmp_lba = offset / 512;                               //27
+    offset = offset % 512;                                //176
+    tmp_lba_range = (offset + size - 1) / 512 + 1;        //11
+    printf("offset : %ld, lba number : %d, range : %d\n", offset, tmp_lba, tmp_lba_range);
 
     process_size = 0;
     remain_size = size;
@@ -510,6 +525,15 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
 
             read_size = ftl_read(tmp_buf, tmp_lba + idx);
             if(read_size == 0) memset(tmp_buf, 0, 512);
+            else
+            {
+                PCA_RULE pca;
+                pca.pca = L2P[tmp_lba+idx];
+                PCA_Used.arr[pca.fields.block][pca.fields.page] = false;
+                PCA_Used.cnt[pca.fields.block] -= 1;
+                P2L[pca.pca] = INVALID_PCA;
+                L2P[tmp_lba+idx] = INVALID_PCA;
+            }
             memcpy(tmp_buf + offset, buf + process_size, rst);
 
             if (remain_size >= rst)
