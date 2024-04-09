@@ -9,6 +9,7 @@
 #include <fuse.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
@@ -242,11 +243,12 @@ static void ftl_gc()
                 mv_size = nand_write(temp_buf, curr_pca.pca, mv_size);
                 PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
                 PCA_Used.cnt[curr_pca.fields.block] += 1;
-                curr_pca.page += 1;
+                curr_pca.fields.page += 1;
             }
         }
         nand_erase(PCA_Used.min_two);
         PCA_Used.cnt[PCA_Used.min_two] = 0;
+        enqueue(PCA_Empty, PCA_Used.min_two);
     }
     
     pca.fields.block = PCA_Used.min_one;
@@ -268,11 +270,12 @@ static void ftl_gc()
             mv_size = nand_write(temp_buf, curr_pca.pca, mv_size);
             PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
             PCA_Used.cnt[curr_pca.fields.block] += 1;
-            curr_pca.page += 1;
+            curr_pca.fields.page += 1;
         }
     }
     nand_erase(PCA_Used.min_one);
     PCA_Used.cnt[PCA_Used.min_one] = 0;
+    enqueue(PCA_Empty, PCA_Used.min_one);
 
     return;
 }
@@ -285,9 +288,9 @@ static unsigned int get_next_pca()
     if (curr_pca.pca == INVALID_PCA)
     {
         //init
-        curr_pca.block = PCA_Empty.arr[0];
+        curr_pca.fields.block = PCA_Empty.arr[0];
         dequeue(PCA_Empty);
-        curr_pca.page = 0;
+        curr_pca.fields.page = 0;
     }
 
     else if(curr_pca.pca != FULL_PCA) curr_pca.fields.page += 1;
@@ -502,9 +505,11 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
             rst = 512 - offset;
 
             char* tmp_buf;
+            tmp_buf = malloc(512 * sizeof(char));
             int read_size;
 
-            read_size = ssd_do_read(tmp_buf, 512, tmp_lba * 512);
+            read_size = ftl_read(tmp_buf, tmp_lba + idx);
+            if(read_size == 0) memset(tmp_buf, 0, 512);
             memcpy(tmp_buf + offset, buf + process_size, rst);
 
             if (remain_size >= rst)
