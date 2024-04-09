@@ -59,16 +59,14 @@ struct queue PCA_Empty;
 static void enqueue(struct queue q, unsigned int val)
 {
     q.arr[q.size] = val;
-    q.size += 1;
     return;
 }
 
 static void dequeue(struct queue q)
 {
-    for(int i = 1; i <= q.size; i++){
+    for(int i = 1; i < q.size; i++){
         q.arr[i-1] = q.arr[i];
     }
-    q.size -= 1;
     return;
 }
 
@@ -223,9 +221,9 @@ static void gc_move(unsigned int nand, unsigned int page)
 
     // read and maintain related infornmation
     int mv_size = nand_read(temp_buf, pca.pca);
-    L2P[P2L[pca.pca]] = curr_pca.pca;
-    P2L[curr_pca.pca] = P2L[pca.pca];
-    P2L[pca.pca] = INVALID_PCA;
+    L2P[P2L[pca.fields.block * 20 + pca.fields.page]] = curr_pca.pca;
+    P2L[curr_pca.fields.block * 20 + curr_pca.fields.page] = P2L[pca.fields.block * 20 + pca.fields.page];
+    P2L[pca.fields.block * 20 + pca.fields.page] = INVALID_PCA;
     PCA_Used.arr[nand][page] = false;
 
     // write and maintain related infornmation
@@ -256,6 +254,7 @@ static void ftl_gc()
         nand_erase(PCA_Used.min_two);
         PCA_Used.cnt[PCA_Used.min_two] = 0;
         enqueue(PCA_Empty, PCA_Used.min_two);
+        PCA_Empty.size += 1;
         printf("Clean two nands~\n");
     }
     
@@ -269,12 +268,14 @@ static void ftl_gc()
     nand_erase(PCA_Used.min_one);
     PCA_Used.cnt[PCA_Used.min_one] = 0;
     enqueue(PCA_Empty, PCA_Used.min_one);
+    PCA_Empty.size += 1;
 
     if(curr_pca.fields.page >= page_number)
     {
         curr_pca.fields.block = PCA_Empty.arr[0];
         curr_pca.fields.page = 0;
         dequeue(PCA_Empty);
+        PCA_Empty.size -= 1;
     }
 
     return;
@@ -290,6 +291,8 @@ static unsigned int get_next_pca()
         //init
         curr_pca.fields.block = PCA_Empty.arr[0];
         dequeue(PCA_Empty);
+        PCA_Empty.size -= 1;
+        printf("PCA_Empty size : %d\n", PCA_Empty.size);
         curr_pca.fields.page = 0;
     }
 
@@ -309,10 +312,13 @@ static unsigned int get_next_pca()
         curr_pca.fields.block = PCA_Empty.arr[0];
         curr_pca.fields.page = 0;
         dequeue(PCA_Empty);
+        PCA_Empty.size -= 1;
+        printf("PCA_Empty size : %d\n", PCA_Empty.size);
 
         if (PCA_Empty.size == 0)
         {
             // ssd is nearly full, do garbage collection
+            printf("=================\n");
             printf("Need to do GC!\n");
             ftl_gc();
         }
@@ -359,7 +365,7 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     if (nand_write(buf, pca.pca, lba_rnage) > 0)
     {
         L2P[lba] = pca.pca;
-        P2L[pca.pca] = lba;
+        P2L[pca.fields.block * 20 + pca.fields.page] = lba;
         return 512;
     }
     else
@@ -525,7 +531,7 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
                 pca.pca = L2P[tmp_lba+idx];
                 PCA_Used.arr[pca.fields.block][pca.fields.page] = false;
                 PCA_Used.cnt[pca.fields.block] -= 1;
-                P2L[pca.pca] = INVALID_PCA;
+                P2L[pca.fields.block * 20 + pca.fields.page] = INVALID_PCA;
                 L2P[tmp_lba+idx] = INVALID_PCA;
             }
             memcpy(tmp_buf + offset, buf + process_size, rst);
