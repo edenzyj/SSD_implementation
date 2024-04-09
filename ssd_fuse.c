@@ -534,15 +534,17 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
                 P2L[pca.fields.block * 20 + pca.fields.page] = INVALID_PCA;
                 L2P[tmp_lba+idx] = INVALID_PCA;
             }
-            memcpy(tmp_buf + offset, buf + process_size, rst);
 
             if (remain_size >= rst)
             {
+                memcpy(tmp_buf + offset, buf + process_size, rst);
                 rst = ftl_write(tmp_buf, offset + rst, tmp_lba + idx);
             }
             else
             {
-                rst = ftl_write(tmp_buf, offset + remain_size, tmp_lba + idx);
+                memcpy(tmp_buf + offset, buf + process_size, remain_size);
+                if(read_size > offset + remain_size) rst = ftl_write(tmp_buf, read_size, tmp_lba + idx);
+                else rst = ftl_write(tmp_buf, offset + remain_size, tmp_lba + idx);
             }
 
             if (rst < 0)
