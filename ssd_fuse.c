@@ -76,31 +76,22 @@ struct priority_array
 {
     bool** arr;
     unsigned int* cnt;
-    unsigned int min_one;
-    unsigned int min_two;
+    unsigned int min;
 };
 
 struct priority_array PCA_Used;
 
 static struct priority_array comparison(struct priority_array pa)
 {
-    int small_one = page_number + 1;
-    int small_two = page_number + 1;
+    int smallest = page_number + 1;
 
     for(int i = 0; i < PHYSICAL_NAND_NUM; i++)
     {
         if(i == curr_pca.fields.block) continue;
-        if(pa.cnt[i] < small_one)
+        if(pa.cnt[i] < smallest)
         {
-            pa.min_two = pa.min_one;
-            pa.min_one = i;
-            small_two = small_one;
-            small_one = pa.cnt[i];
-        }
-        else if(pa.cnt[i] < small_two)
-        {
-            pa.min_two = i;
-            small_two = pa.cnt[i];
+            pa.min = i;
+            smallest = pa.cnt[i];
         }
     }
     return pa;
@@ -243,34 +234,18 @@ static void ftl_gc()
     PCA_Used = comparison(PCA_Used);
 
     // no need to do garbage collection
-    if(PCA_Used.cnt[PCA_Used.min_one] == page_number) return;
-
-    // clean two nands if it can.
-    if(PCA_Used.cnt[PCA_Used.min_one] + PCA_Used.cnt[PCA_Used.min_two] <= page_number)
-    {
-        for(int i = 0; i < page_number; i++)
-        {
-            if(PCA_Used.arr[PCA_Used.min_two][i])
-            {
-                gc_move(PCA_Used.min_two, i);
-            }
-        }
-        nand_erase(PCA_Used.min_two);
-        PCA_Used.cnt[PCA_Used.min_two] = 0;
-        PCA_Empty = enqueue(PCA_Empty, PCA_Used.min_two);
-        printf("Clean two nands~\n");
-    }
+    if(PCA_Used.cnt[PCA_Used.min] == page_number) return;
     
     for(int i = 0; i < page_number; i++)
     {
-        if(PCA_Used.arr[PCA_Used.min_one][i])
+        if(PCA_Used.arr[PCA_Used.min][i])
         {
-            gc_move(PCA_Used.min_one, i);
+            gc_move(PCA_Used.min, i);
         }
     }
-    nand_erase(PCA_Used.min_one);
-    PCA_Used.cnt[PCA_Used.min_one] = 0;
-    PCA_Empty = enqueue(PCA_Empty, PCA_Used.min_one);
+    nand_erase(PCA_Used.min);
+    PCA_Used.cnt[PCA_Used.min] = 0;
+    PCA_Empty = enqueue(PCA_Empty, PCA_Used.min);
 
     if(curr_pca.fields.page >= page_number)
     {
@@ -670,8 +645,7 @@ int main(int argc, char* argv[])
     }
     PCA_Used.cnt = malloc(PHYSICAL_NAND_NUM * sizeof(int));
     memset(PCA_Used.cnt, 0, PHYSICAL_NAND_NUM * sizeof(int));
-    PCA_Used.min_one = 0;
-    PCA_Used.min_two = 1;
+    PCA_Used.min = 0;
 
     //create nand file
     for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
