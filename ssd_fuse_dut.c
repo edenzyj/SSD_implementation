@@ -130,6 +130,20 @@ int main(int argc, char** argv)
             close(fd);
             return 0;
         case 'r':
+            if ( !(fptr = fopen(path, "r+")))
+            {
+                perror("open");
+                return 1;
+            }
+            rc = do_rw(fptr, cmd == 'r', param[0], param[1]);
+            if (rc < 0)
+            {
+                goto error;
+            }
+            printf("\ntransferred %d bytes \n", rc);
+
+            fclose(fptr);
+            return 0;
         case 'w':
             if ( !(fptr = fopen(path, "r+")))
             {

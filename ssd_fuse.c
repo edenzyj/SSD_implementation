@@ -56,18 +56,20 @@ struct queue
 
 struct queue PCA_Empty;
 
-static void enqueue(struct queue q, unsigned int val)
+static struct queue enqueue(struct queue q, unsigned int val)
 {
     q.arr[q.size] = val;
-    return;
+    q.size += 1;
+    return q;
 }
 
-static void dequeue(struct queue q)
+static struct queue dequeue(struct queue q)
 {
     for(int i = 1; i < q.size; i++){
         q.arr[i-1] = q.arr[i];
     }
-    return;
+    q.size -= 1;
+    return q;
 }
 
 struct priority_array
@@ -80,7 +82,7 @@ struct priority_array
 
 struct priority_array PCA_Used;
 
-static void comparison(struct priority_array pa)
+static struct priority_array comparison(struct priority_array pa)
 {
     int small_one = page_number + 1;
     int small_two = page_number + 1;
@@ -101,7 +103,7 @@ static void comparison(struct priority_array pa)
             small_two = pa.cnt[i];
         }
     }
-    return;
+    return pa;
 }
 
 static int ssd_resize(size_t new_size)
@@ -221,9 +223,9 @@ static void gc_move(unsigned int nand, unsigned int page)
 
     // read and maintain related infornmation
     int mv_size = nand_read(temp_buf, pca.pca);
-    L2P[P2L[pca.fields.block * 20 + pca.fields.page]] = curr_pca.pca;
-    P2L[curr_pca.fields.block * 20 + curr_pca.fields.page] = P2L[pca.fields.block * 20 + pca.fields.page];
-    P2L[pca.fields.block * 20 + pca.fields.page] = INVALID_PCA;
+    L2P[P2L[pca.fields.block * page_number + pca.fields.page]] = curr_pca.pca;
+    P2L[curr_pca.fields.block * page_number + curr_pca.fields.page] = P2L[pca.fields.block * page_number + pca.fields.page];
+    P2L[pca.fields.block * page_number + pca.fields.page] = INVALID_PCA;
     PCA_Used.arr[nand][page] = false;
 
     // write and maintain related infornmation
@@ -231,12 +233,14 @@ static void gc_move(unsigned int nand, unsigned int page)
     PCA_Used.arr[curr_pca.fields.block][curr_pca.fields.page] = true;
     PCA_Used.cnt[curr_pca.fields.block] += 1;
     curr_pca.fields.page += 1;
+
+    return;
 }
 
 static void ftl_gc()
 {
     // get the two nand number with minimal used size
-    comparison(PCA_Used);
+    PCA_Used = comparison(PCA_Used);
 
     // no need to do garbage collection
     if(PCA_Used.cnt[PCA_Used.min_one] == page_number) return;
@@ -253,8 +257,7 @@ static void ftl_gc()
         }
         nand_erase(PCA_Used.min_two);
         PCA_Used.cnt[PCA_Used.min_two] = 0;
-        enqueue(PCA_Empty, PCA_Used.min_two);
-        PCA_Empty.size += 1;
+        PCA_Empty = enqueue(PCA_Empty, PCA_Used.min_two);
         printf("Clean two nands~\n");
     }
     
@@ -267,15 +270,13 @@ static void ftl_gc()
     }
     nand_erase(PCA_Used.min_one);
     PCA_Used.cnt[PCA_Used.min_one] = 0;
-    enqueue(PCA_Empty, PCA_Used.min_one);
-    PCA_Empty.size += 1;
+    PCA_Empty = enqueue(PCA_Empty, PCA_Used.min_one);
 
     if(curr_pca.fields.page >= page_number)
     {
         curr_pca.fields.block = PCA_Empty.arr[0];
         curr_pca.fields.page = 0;
-        dequeue(PCA_Empty);
-        PCA_Empty.size -= 1;
+        PCA_Empty = dequeue(PCA_Empty);
     }
 
     return;
@@ -290,9 +291,7 @@ static unsigned int get_next_pca()
     {
         //init
         curr_pca.fields.block = PCA_Empty.arr[0];
-        dequeue(PCA_Empty);
-        PCA_Empty.size -= 1;
-        printf("PCA_Empty size : %d\n", PCA_Empty.size);
+        PCA_Empty = dequeue(PCA_Empty);
         curr_pca.fields.page = 0;
     }
 
@@ -311,9 +310,7 @@ static unsigned int get_next_pca()
         // allocate new block which is empty
         curr_pca.fields.block = PCA_Empty.arr[0];
         curr_pca.fields.page = 0;
-        dequeue(PCA_Empty);
-        PCA_Empty.size -= 1;
-        printf("PCA_Empty size : %d\n", PCA_Empty.size);
+        PCA_Empty = dequeue(PCA_Empty);
 
         if (PCA_Empty.size == 0)
         {
@@ -351,21 +348,23 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     /*  TODO: only basic write case, need to consider other cases */
     // Done
 
-    /**
+    PCA_RULE pca;
+
     if(L2P[lba] != INVALID_PCA)
     {
-        printf(" --> Cannot write at the same lba !!!\n");
-        return -EINVAL;
+        pca.pca = L2P[lba];
+        L2P[lba] = INVALID_PCA;
+        P2L[pca.fields.block * page_number + pca.fields.page] = INVALID_PCA;
+        PCA_Used.arr[pca.fields.block][pca.fields.page] = false;
+        PCA_Used.cnt[pca.fields.block] -= 1;
     }
-    **/
     
-    PCA_RULE pca;
     pca.pca = get_next_pca();
 
     if (nand_write(buf, pca.pca, lba_rnage) > 0)
     {
         L2P[lba] = pca.pca;
-        P2L[pca.fields.block * 20 + pca.fields.page] = lba;
+        P2L[pca.fields.block * page_number + pca.fields.page] = lba;
         return 512;
     }
     else
@@ -531,7 +530,7 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
                 pca.pca = L2P[tmp_lba+idx];
                 PCA_Used.arr[pca.fields.block][pca.fields.page] = false;
                 PCA_Used.cnt[pca.fields.block] -= 1;
-                P2L[pca.fields.block * 20 + pca.fields.page] = INVALID_PCA;
+                P2L[pca.fields.block * page_number + pca.fields.page] = INVALID_PCA;
                 L2P[tmp_lba+idx] = INVALID_PCA;
             }
 
@@ -546,6 +545,8 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
                 if(read_size > offset + remain_size) rst = ftl_write(tmp_buf, read_size, tmp_lba + idx);
                 else rst = ftl_write(tmp_buf, offset + remain_size, tmp_lba + idx);
             }
+
+            free(tmp_buf);
 
             if (rst < 0)
             {
